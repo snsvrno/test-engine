@@ -1,0 +1,10 @@
+{
+	"name": "test-engine",
+	"url" : "",
+	"license": "MIT",
+	"tags": ["test"],
+	"description": "A language independent test engine written in Haxe",
+	"classPath": "lib",
+	"version": "0.0.1",
+	"contributors": ["snsvrno"]
+}
