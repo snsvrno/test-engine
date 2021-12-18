@@ -1,4 +1,6 @@
 -cp src
 -main Main
 
+-lib termcolors
+
 -neko run.n

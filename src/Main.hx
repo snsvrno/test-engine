@@ -1,10 +1,11 @@
+import termcolors.Termcolors.*;
+
+using StringTools;
+using termcolors.TermcolorsTools;
+
 class Main {
 
-    private static var options = {
-        testsPath: "tests",
-        rootPath: "",
-    };
-    
+    private static var options : Options = Options.defaults();
     private static var tests : Map<String, Array<Test>> = new Map();
     private static var definition : Map<String, TestDefinition> = new Map();
 
@@ -14,28 +15,43 @@ class Main {
         run();
     }
 
+    /**
+     * reads the command line arguements
+     */
     private static function processArgs() {
         var args = Sys.args();
-        
         while(args.length > 0) {
             var a = args.shift();
 
             if(a.substr(0,2) == "--") { 
                 var value = args.shift();
                 switch(a) {
-                    case "--test-path": options.testsPath = value;
-
+                    case "--test-path": 
+                        options.testsPath = value;
+                    case "--group":
+                        options.runGroups.push(makeRegex(value));
+                    case "--test":
+                        options.runTests.push(makeRegex(value));
                     case unknown:
                         Sys.println('unknown switch "$unknown=$value"');
                 }
-            } else if (a.substr(0,1) == "-") {
-
+            } else if (a.substr(0,1) == "-") { 
+                switch(a) {
+                    case "-a": 
+                        options.showall = true;
+                    case unknown:
+                        Sys.println('unknown switch "$unknown"');
+                }
             } else options.rootPath = a;
         }
+
     }
 
+    /**
+     * loads the tests from the file and builds out the `test` map
+     */
     private static function prepare() {
-        
+
         ///////////////////////////////////////////////////////////////////////////////
         // getting the test definitions
         options.testsPath = haxe.io.Path.join([options.rootPath, options.testsPath]);
@@ -141,46 +157,96 @@ class Main {
             var testCount : Int = 0;
             var passedTests : Int = 0;
 
+            ///////////////////////////////////////////////////////////////////////
+            // various ways to check if we actually want to 
+            // run this test group or not.
+
+            var skiptestgroup = false;
+            if (options.runGroups.length > 0) {
+                skiptestgroup = true;
+                for (rg in options.runGroups) if (rg.match(g)) skiptestgroup = false;
+            }
+            for (ig in options.ignoreGroups) if (ig.match(g)) skiptestgroup = true;
+
+            ///////////////////////////////////////////////////////////////////////
+
+            // skips the group if applicalbe.
+            if (skiptestgroup) continue;
+
             for (t in ts) {
-                // check if we have a neko file.
+
+                //////////////////////////////////////////////////////////
+                // checking if we want to skip this test.
+                var skiptest = false;
+                if (options.runTests.length > 0) {
+                    skiptest = true;
+                    for (rt in options.runTests) if (rt.match(t.name)) skiptest = false;
+                }
+                for (it in options.ignoreTests) if (it.match(t.name)) skiptest = true;
+                //////////////////////////////////////////////////
+
+                if (skiptest) continue;
+
+                // check if we have a neko file for the group's `runner`.
                 var nekopath = haxe.io.Path.join([options.rootPath, g + ".n"]);
                 if (sys.FileSystem.exists(nekopath)) {
                     var process = new sys.io.Process("neko", [nekopath]);
-                    process.stdin.writeString(t.input + "\n");
 
+                    //////////////////////////////////////////////////////
+                    // THE SENDING
+
+                    // writes the 'input' for the test to the std.
+                    process.stdin.writeString(t.input);
+                    // printRawOutputs(t.input);
+                    // checks if we have an object to write
                     if (t.object != null) {
+                        // when writing an object we need to signal that we are switching
+                        // to an object by using the `17` ascii code
                         process.stdin.writeString("\n" + String.fromCharCode(17) + "\n");
                         process.stdin.writeString(t.object);
                     }
+
+                    // we are done sending things, sending the closing ascii char `18`
                     process.stdin.writeString("\n" + String.fromCharCode(18) + "\n");
-                    
+
+                    /////////////////////////////////////////////////////
+                    // THE RECEIVING / READING
+
                     var byte;
                     var output = "";
-                    while((byte = process.stdout.readByte()) != 0) {
-                        output += String.fromCharCode(byte);
-                    }
+                    try {
+                        // reading each character from the input line.
+                        while((byte = process.stdout.readByte()) != 0) {
+                            output += String.fromCharCode(byte);
+                        }
+                    } catch (e) { }
+
                     // removes the last return
                     output = output.substr(0, output.length-1);
+                    //printRawOutputs(output);
 
                     testCount += 1;
                     totalTests += 1;
 
+                    var testname = blue(g) + "::" + blue(t.name);
                     if (t.expectedOutput == output) { 
                         passedTests += 1;
                         totalPassed += 1;
-                    } else { 
-                        Sys.println('ERROR: ${t.name}');
-                        Sys.println('     expected:  ${t.expectedOutput}');
-                        Sys.println('     actual:    ${output}');
+                        if (options.showall) printPassing(testname, output);
+                    } else {
+                        printError(testname, t.expectedOutput, output);
                     }
 
                     process.close();
+                } else {
+                    throw 'unimplemented, only can use neko for now';
                 }
             }
 
-            Sys.println('Test Group "$g": passed $passedTests of $testCount');
+            Sys.println('Test Group "${blue(g)}": passed ${green(passedTests)} of ${green(testCount)}');
         }
-        Sys.println('Total passed $totalPassed of $totalTests');
+
+        Sys.println('Total passed ${green(totalPassed)} of ${green(totalTests)}');
 
 
     }
@@ -198,5 +264,64 @@ class Main {
             }
         }
         return files;
+    }
+
+    inline static private function makeRegex(string : String) : EReg {
+        return new EReg(string
+                .replace('.', '\\.')
+                .replace('*','.*'), 'g');
+    }
+
+    inline static private function printPassing(name : String, actual : String) {
+        var errortext = green("PASSED");
+
+        Sys.println('$errortext: $name');
+
+        var actualText   = yellow("actual") + ":    ";
+
+        var indent : Int = 4;
+
+        var alines = actual.split("\n");
+        for (i in 0 ... alines.length) {
+            if (i == 0) Sys.println(makeSpaces(indent) + actualText + alines[i]);
+            else Sys.println(makeSpaces(indent + actualText.truelength()) + alines[i]);
+        }
+
+    }
+
+    inline static private function printError(name : String, expected : String, actual : String) {
+        var errortext = red("ERROR");
+
+        Sys.println('$errortext: $name');
+
+        var expectedText = yellow("expected") + ":  ";
+        var actualText   = yellow("actual") + ":    ";
+
+        var indent : Int = 4;
+
+        var elines = expected.split("\n");
+        for (i in 0 ... elines.length) {
+            if (i == 0) Sys.println(makeSpaces(indent) + expectedText + elines[i]);
+            else Sys.println(makeSpaces(indent + expectedText.truelength()) + elines[i]);
+        }
+
+        var alines = actual.split("\n");
+        for (i in 0 ... alines.length) {
+            if (i == 0) Sys.println(makeSpaces(indent) + actualText + alines[i]);
+            else Sys.println(makeSpaces(indent + actualText.truelength()) + alines[i]);
+        }
+    }
+
+    inline private static function makeSpaces(length : Int) : String {
+        var spaces = "";
+        while(spaces.length < length) spaces += " ";
+        return spaces;
+    }
+
+    inline private static function printRawOutputs(string : String) {
+        var string = string
+            .replace("\n","\\n\n");
+
+        Sys.println(string);
     }
 }
