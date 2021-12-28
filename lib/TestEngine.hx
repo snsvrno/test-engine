@@ -51,6 +51,8 @@ class TestEngine {
             }
 
             callback(input, object);
+
+            Sys.exit(0);
         } catch (e) {
             Sys.exit(1);
         }

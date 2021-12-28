@@ -11,7 +11,9 @@ class Main {
 
     public static function main() {
         processArgs();
+        Sys.setCwd(options.rootPath);
         prepare();
+        buildTestNeko();
         run();
     }
 
@@ -34,13 +36,22 @@ class Main {
                         options.runTests.push(makeRegex(value));
                     case unknown:
                         Sys.println('unknown switch "$unknown=$value"');
+                        Sys.exit(1);
                 }
             } else if (a.substr(0,1) == "-") { 
                 switch(a) {
+                    case "-h":
+                        printHelp();
+                        Sys.exit(0);
                     case "-a": 
                         options.showall = true;
+                    case "-l":
+                        options.listonly = true;
+                    case "-s":
+                        options.showsymbols = true;
                     case unknown:
                         Sys.println('unknown switch "$unknown"');
+                        Sys.exit(1);
                 }
             } else options.rootPath = a;
         }
@@ -123,15 +134,14 @@ class Main {
                     }
                 }
 
-                var output : String = {
+                var output : Null<String> = {
                     var objectPath = f + "." + def.output;
                     if (sys.FileSystem.exists(objectPath)) {
                         var content = sys.io.File.getContent(objectPath);
                         content;
                     } else {
-                        Sys.println('expected file "$objectPath" found nothing');
-                        Sys.exit(1);
-                        "";
+                        // this is a failure test, there should be no output.
+                        null;
                     }
                 }
 
@@ -148,6 +158,31 @@ class Main {
 
 
     }
+    
+    /**
+     * checks if there is a `test.hxml` file in the directory
+     * and will run it to make sure tests are up-to-date
+     */
+    private static function buildTestNeko() {
+        var hxmlpath = haxe.io.Path.join([options.rootPath, "test.hxml"]);
+        if (sys.FileSystem.exists(hxmlpath)) {
+            Sys.print('found "${blue("test.hxml")}", building ...');
+            
+            var process = new sys.io.Process("haxe", [hxmlpath]);
+            var error = process.stderr.readAll().toString();
+            var exitCode = process.exitCode();
+            process.close();
+
+            if (exitCode == 0) Sys.println(green("success"));
+            else {
+                Sys.println(red("failure!"));
+                Sys.println("");
+                Sys.println(error);
+                Sys.exit(1);
+            }
+        }
+    }
+
 
     private static function run() {
         var totalTests : Int = 0;
@@ -221,23 +256,27 @@ class Main {
                         }
                     } catch (e) { }
 
+                    var exitCode = process.exitCode();
+                    process.close();
+
                     // removes the last return
                     output = output.substr(0, output.length-1);
                     //printRawOutputs(output);
 
                     testCount += 1;
                     totalTests += 1;
-
                     var testname = blue(g) + "::" + blue(t.name);
-                    if (t.expectedOutput == output) { 
+                    if ((t.expectedOutput == null && exitCode != 0) || t.expectedOutput == output) { 
                         passedTests += 1;
                         totalPassed += 1;
-                        if (options.showall) printPassing(testname, output);
+                        if (options.showall || options.listonly) printLine('passed', testname);
+                    } else if (t.expectedOutput == null) {
+                        throw 'this should have been a failure $testname';
                     } else {
-                        printError(testname, t.expectedOutput, output);
+                        if (options.listonly) printLine('error', testname);
+                        else printEverything('error', testname, t.expectedOutput, output);
                     }
 
-                    process.close();
                 } else {
                     throw 'unimplemented, only can use neko for now';
                 }
@@ -249,6 +288,10 @@ class Main {
         Sys.println('Total passed ${green(totalPassed)} of ${green(totalTests)}');
 
 
+    }
+
+    private static function printHelp() {
+        Sys.println("Test Engine");
     }
 
     private static function getFiles(path : String) : Array<String> {
@@ -267,48 +310,49 @@ class Main {
     }
 
     inline static private function makeRegex(string : String) : EReg {
-        return new EReg(string
+        // replacing some special 'plain' wildcards with regex symbols.
+        string = string
                 .replace('.', '\\.')
-                .replace('*','.*'), 'g');
+                .replace('*','.*');
+
+        // adding a leader and tailer so that this is an "absolute match"
+        // unless they user puts *
+        string = '^' + string + '$';
+
+        return new EReg(string, 'g');
     }
 
-    inline static private function printPassing(name : String, actual : String) {
-        var errortext = green("PASSED");
-
-        Sys.println('$errortext: $name');
-
-        var actualText   = yellow("actual") + ":    ";
-
-        var indent : Int = 4;
-
-        var alines = actual.split("\n");
-        for (i in 0 ... alines.length) {
-            if (i == 0) Sys.println(makeSpaces(indent) + actualText + alines[i]);
-            else Sys.println(makeSpaces(indent + actualText.truelength()) + alines[i]);
+    inline static private function printLine(status : String, name : String) {
+        var statustext = switch(status.toLowerCase()) {
+            case "error": red(status);
+            case "passed": green(status);
+            case "warning": yellow(status);
+            case other: other;
         }
 
+        Sys.println('$statustext: $name');
     }
 
-    inline static private function printError(name : String, expected : String, actual : String) {
-        var errortext = red("ERROR");
+    inline static private function printEverything(status : String, name : String, expected : String, actual : String) {
 
-        Sys.println('$errortext: $name');
+        printLine(status, name);
 
         var expectedText = yellow("expected") + ":  ";
         var actualText   = yellow("actual") + ":    ";
 
         var indent : Int = 4;
+        var nl = if (options.showsymbols) cyan("⮒") else "";
 
         var elines = expected.split("\n");
         for (i in 0 ... elines.length) {
-            if (i == 0) Sys.println(makeSpaces(indent) + expectedText + elines[i]);
-            else Sys.println(makeSpaces(indent + expectedText.truelength()) + elines[i]);
+            if (i == 0) Sys.println(makeSpaces(indent) + expectedText + replaceSpecialCharacters(elines[i]) + nl);
+            else Sys.println(makeSpaces(indent + expectedText.truelength()) + replaceSpecialCharacters(elines[i]) + nl);
         }
 
         var alines = actual.split("\n");
         for (i in 0 ... alines.length) {
-            if (i == 0) Sys.println(makeSpaces(indent) + actualText + alines[i]);
-            else Sys.println(makeSpaces(indent + actualText.truelength()) + alines[i]);
+            if (i == 0) Sys.println(makeSpaces(indent) + actualText + replaceSpecialCharacters(alines[i]) + nl);
+            else Sys.println(makeSpaces(indent + actualText.truelength()) + replaceSpecialCharacters(alines[i]) + nl);
         }
     }
 
@@ -323,5 +367,13 @@ class Main {
             .replace("\n","\\n\n");
 
         Sys.println(string);
+    }
+
+    inline private static function replaceSpecialCharacters(string : String) : String {
+        if (options.showsymbols == false) return string;
+        else return string
+            .replace(" ", cyan("·"))
+            .replace("\t", cyan("➞"))
+            .replace("\n", cyan("⮒\n"));
     }
 }

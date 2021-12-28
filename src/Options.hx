@@ -2,7 +2,9 @@ typedef Options = {
 	testsPath : String,
 	rootPath : String,
 
+	showsymbols : Bool,
 	showall : Bool,
+	listonly : Bool,
 
 	runTests : Array<EReg>,
 	runGroups : Array<EReg>,
@@ -14,7 +16,9 @@ function defaults() : Options return {
 	testsPath : "tests",
 	rootPath: "",
 
+	showsymbols: false,
 	showall: false,
+	listonly: false,
 
 	runTests: [],
 	runGroups: [],
